@@ -81,35 +81,16 @@ private struct OnboardingView: View {
     }
 
     private var backdrop: some View {
-        ZStack {
-            Color(red: 0.06, green: 0.06, blue: 0.08)
-            RadialGradient(
-                colors: [purple.opacity(0.28), Color.clear],
-                center: .topLeading, startRadius: 20, endRadius: 420
-            )
-            RadialGradient(
-                colors: [cyan.opacity(0.22), Color.clear],
-                center: .bottomTrailing, startRadius: 20, endRadius: 420
-            )
-        }
-        .ignoresSafeArea()
+        Color(red: 0.06, green: 0.06, blue: 0.08)
+            .ignoresSafeArea()
     }
 
     private var header: some View {
         VStack(spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(LinearGradient(colors: [purple, cyan],
-                                         startPoint: .topLeading,
-                                         endPoint: .bottomTrailing))
-                    .frame(width: 80, height: 80)
-                    .shadow(color: purple.opacity(0.5), radius: 18, x: 0, y: 10)
-                Image(systemName: "doc.on.clipboard.fill")
-                    .font(.system(size: 36, weight: .medium))
-                    .foregroundColor(.white)
-            }
+            appIcon
+                .frame(width: 88, height: 88)
             VStack(spacing: 4) {
-                Text("Welcome to JugnooClipboard")
+                Text("Welcome to Copied")
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundColor(.white)
                 Text("Your Mac's clipboard history, always a ⌘⇧V away.")
@@ -118,6 +99,18 @@ private struct OnboardingView: View {
             }
         }
         .padding(.top, 8)
+    }
+
+    @ViewBuilder
+    private var appIcon: some View {
+        if let nsImage = NSApp.applicationIconImage {
+            Image(nsImage: nsImage)
+                .resizable()
+                .interpolation(.high)
+        } else {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(purple)
+        }
     }
 
     private var permissions: some View {
@@ -246,12 +239,8 @@ private struct OnboardingView: View {
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .frame(height: 42)
-                    .background(
-                        LinearGradient(colors: [purple, cyan],
-                                       startPoint: .leading, endPoint: .trailing)
-                    )
+                    .background(purple)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .shadow(color: purple.opacity(0.45), radius: 10, x: 0, y: 6)
             }
             .buttonStyle(.plain)
 

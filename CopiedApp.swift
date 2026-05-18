@@ -4,7 +4,7 @@ import SwiftUI
 import KeyboardShortcuts
 
 @main
-struct JugnooClipboardApp: App {
+struct CopiedApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {

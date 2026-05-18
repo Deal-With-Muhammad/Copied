@@ -1,47 +1,26 @@
 import Cocoa
 
-/// Makes `⌘⇧3/4/5` land on the clipboard without the user holding Control.
+/// Watches the real folder where macOS saves screenshots (Desktop by default,
+/// or wherever `com.apple.screencapture location` is set) and copies each new
+/// screenshot to the clipboard. No file redirection — the user's screenshot
+/// stays where they expect it.
 ///
-/// Why the previous approaches failed:
-/// - `NSMetadataQuery` on `kMDItemIsScreenCapture`: Spotlight indexing is
-///   laggy and, under sandbox/TCC, often never fires on Desktop.
-/// - Direct `DispatchSource` watch on `~/Desktop`: needs Files-and-Folders
-///   permission. Even when granted the first time, macOS can silently revoke
-///   for ad-hoc-signed apps; and the first screenshot gets consumed by the
-///   TCC prompt itself.
-///
-/// What this implementation does instead: take over `com.apple.screencapture
-/// location`, pointing it at a folder inside our own Application Support
-/// directory (no TCC required). Every screenshot lands there; we read it,
-/// push it to the pasteboard, delete the file. On disable/quit we restore
-/// the user's original location so nothing is left dangling.
+/// Detection is filename-prefix + xattr based, so we don't grab unrelated
+/// images that happen to land on the Desktop.
 final class ScreenshotWatcher {
     static let shared = ScreenshotWatcher()
 
     static let preferenceKey = "JCAutoCopyScreenshots"
-    private static let originalLocationKey = "JCOriginalScreencaptureLocation"
-    private static let defaultSentinel = "__macos_default__"
 
     private var source: DispatchSourceFileSystemObject?
     private var folderFD: CInt = -1
     private var watchedFolder: URL?
-    private var knownFiles: Set<URL> = []
-    private var processing: Set<URL> = []
+    private var knownFiles: Set<String> = []
+    private var processing: Set<String> = []
     private let queue = DispatchQueue(
-        label: "com.jugnoo.JugnooClipboard.screenshotWatcher",
+        label: "com.jugnoo.Copied.screenshotWatcher",
         qos: .userInitiated
     )
-
-    /// Where we tell macOS to save screenshots while auto-copy is enabled.
-    /// Lives inside the app's data directory — no TCC required.
-    private var captureFolder: URL {
-        let fm = FileManager.default
-        let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = appSupport.appendingPathComponent("JugnooClipboard/Captures",
-                                                    isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }
 
     static var isEnabled: Bool {
         get {
@@ -59,25 +38,37 @@ final class ScreenshotWatcher {
         }
     }
 
+    /// Where macOS is currently saving screenshots. Reads
+    /// `com.apple.screencapture location`; falls back to ~/Desktop.
+    var screenshotFolder: URL {
+        if let path = UserDefaults(suiteName: "com.apple.screencapture")?
+            .string(forKey: "location"),
+           !path.isEmpty {
+            return URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        }
+        return FileManager.default
+            .urls(for: .desktopDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory() + "/Desktop")
+    }
+
     // MARK: - Lifecycle
 
     func start() {
         teardownWatch()
-        redirectScreencapture()
-        watchFolder(captureFolder)
+        let folder = screenshotFolder
+        // Touch the folder once so macOS's TCC prompt for Desktop fires now,
+        // not silently next time a screenshot lands.
+        _ = try? FileManager.default.contentsOfDirectory(at: folder,
+                                                        includingPropertiesForKeys: nil)
+        watchFolder(folder)
     }
 
     func stop() {
         teardownWatch()
-        restoreScreencapture()
     }
 
-    /// Called from `applicationWillTerminate`. Always restore the user's
-    /// preference so a crash or force-quit doesn't leave screenshots forever
-    /// disappearing into our Application Support folder.
     func tearDownForShutdown() {
         teardownWatch()
-        restoreScreencapture()
     }
 
     private func teardownWatch() {
@@ -87,60 +78,6 @@ final class ScreenshotWatcher {
         watchedFolder = nil
         knownFiles.removeAll()
         processing.removeAll()
-    }
-
-    // MARK: - Redirect
-
-    private func redirectScreencapture() {
-        let current = readScreencaptureLocation()
-
-        // Remember the user's original location the first time we take over,
-        // so we can put it back when the toggle is disabled.
-        if UserDefaults.standard.string(forKey: Self.originalLocationKey) == nil {
-            if let current, !current.contains("JugnooClipboard") {
-                UserDefaults.standard.set(current, forKey: Self.originalLocationKey)
-            } else if current == nil {
-                UserDefaults.standard.set(Self.defaultSentinel, forKey: Self.originalLocationKey)
-            }
-        }
-
-        // Only write if we need to — a no-op `defaults write` still touches
-        // the file, which would churn the pasteboard monitor for nothing.
-        if current != captureFolder.path {
-            writeScreencaptureLocation(captureFolder.path)
-        }
-    }
-
-    private func restoreScreencapture() {
-        guard let saved = UserDefaults.standard.string(forKey: Self.originalLocationKey) else {
-            return
-        }
-        if saved == Self.defaultSentinel {
-            deleteScreencaptureLocation()
-        } else {
-            writeScreencaptureLocation(saved)
-        }
-        UserDefaults.standard.removeObject(forKey: Self.originalLocationKey)
-    }
-
-    private func readScreencaptureLocation() -> String? {
-        UserDefaults(suiteName: "com.apple.screencapture")?.string(forKey: "location")
-    }
-
-    private func writeScreencaptureLocation(_ path: String) {
-        runDefaults(["write", "com.apple.screencapture", "location", "-string", path])
-    }
-
-    private func deleteScreencaptureLocation() {
-        runDefaults(["delete", "com.apple.screencapture", "location"])
-    }
-
-    private func runDefaults(_ args: [String]) {
-        let task = Process()
-        task.launchPath = "/usr/bin/defaults"
-        task.arguments = args
-        do { try task.run() } catch { NSLog("defaults \(args) failed: \(error)") }
-        task.waitUntilExit()
     }
 
     // MARK: - Folder watcher
@@ -153,7 +90,7 @@ final class ScreenshotWatcher {
         }
         folderFD = fd
         watchedFolder = folder
-        knownFiles = Set(listFiles(in: folder))
+        knownFiles = Set(listFiles(in: folder).map { $0.path })
 
         let src = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd,
@@ -173,13 +110,14 @@ final class ScreenshotWatcher {
 
     private func handleDirectoryChange() {
         guard let folder = watchedFolder else { return }
-        let current = Set(listFiles(in: folder))
-        let added = current.subtracting(knownFiles)
-        knownFiles = current
+        let current = listFiles(in: folder)
+        let currentPaths = Set(current.map { $0.path })
+        let added = currentPaths.subtracting(knownFiles)
+        knownFiles = currentPaths
         guard !added.isEmpty else { return }
 
-        for url in added where processing.insert(url).inserted {
-            copyToPasteboard(url, attempt: 0)
+        for path in added where processing.insert(path).inserted {
+            copyToPasteboard(URL(fileURLWithPath: path), attempt: 0)
         }
     }
 
@@ -194,21 +132,58 @@ final class ScreenshotWatcher {
         }
     }
 
+    // MARK: - Classification
+
+    private func isLikelyScreenshot(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        guard ["png", "jpg", "jpeg", "heic", "tiff", "tif", "pdf"].contains(ext) else {
+            return false
+        }
+        // macOS sets this xattr on every screencapture-produced file, regardless
+        // of locale or filename. It's the definitive signal.
+        if hasScreenCaptureXattr(url) { return true }
+
+        // Xattr can be a beat late on very fast SSDs — fall back to the locale
+        // prefixes macOS uses for screencapture output.
+        let lower = url.lastPathComponent.lowercased()
+        return lower.hasPrefix("screenshot")
+            || lower.hasPrefix("screen shot")
+            || lower.hasPrefix("cleanshot")
+            || lower.hasPrefix("snip ")
+    }
+
+    private func hasScreenCaptureXattr(_ url: URL) -> Bool {
+        let name = "com.apple.metadata:kMDItemIsScreenCapture"
+        return url.withUnsafeFileSystemRepresentation { ptr -> Bool in
+            guard let ptr else { return false }
+            return getxattr(ptr, name, nil, 0, 0, 0) > 0
+        }
+    }
+
     // MARK: - Copy
 
     private func copyToPasteboard(_ url: URL, attempt: Int) {
         queue.asyncAfter(deadline: .now() + Double(attempt) * 0.1) { [weak self] in
             guard let self else { return }
 
-            // Retry briefly — `screencapture` may still be writing / renaming.
+            // Screenshots land in two phases: file appears, then xattr is set.
+            // Re-check classification on each attempt so we catch the xattr.
+            guard self.isLikelyScreenshot(url) else {
+                if attempt < 8 {
+                    self.copyToPasteboard(url, attempt: attempt + 1)
+                } else {
+                    self.processing.remove(url.path)
+                }
+                return
+            }
+
             guard let data = try? Data(contentsOf: url),
                   let image = NSImage(data: data),
                   image.size.width > 0 else {
-                if attempt < 10 {
+                if attempt < 12 {
                     self.copyToPasteboard(url, attempt: attempt + 1)
                 } else {
-                    NSLog("ScreenshotWatcher: gave up on \(url.lastPathComponent)")
-                    self.processing.remove(url)
+                    self.processing.remove(url.path)
                 }
                 return
             }
@@ -219,12 +194,8 @@ final class ScreenshotWatcher {
                 pb.writeObjects([image])
             }
 
-            // Keep our capture folder small — we already copied the image onto
-            // the pasteboard (and into the clipboard history). If the user
-            // wanted a file, they can paste into Preview / Finder / anywhere.
-            try? FileManager.default.removeItem(at: url)
-            self.knownFiles.remove(url)
-            self.processing.remove(url)
+            // Leave the file where the user expects it (Desktop, etc.).
+            self.processing.remove(url.path)
         }
     }
 }

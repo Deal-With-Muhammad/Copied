@@ -92,7 +92,7 @@ final class ClipboardManager: ObservableObject {
     init() {
         let fm = FileManager.default
         let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = appSupport.appendingPathComponent("JugnooClipboard", isDirectory: true)
+        let dir = appSupport.appendingPathComponent("Copied", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         storageURL = dir.appendingPathComponent("history.json")
         load()
@@ -272,7 +272,7 @@ final class ClipboardManager: ObservableObject {
             let data = try JSONEncoder().encode(snapshot)
             try data.write(to: storageURL, options: .atomic)
         } catch {
-            NSLog("JugnooClipboard save failed: \(error)")
+            NSLog("Copied save failed: \(error)")
         }
     }
 

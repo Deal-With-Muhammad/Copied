@@ -15,31 +15,28 @@ enum AccessibilityHelper {
         return AXIsProcessTrusted()
     }
 
-    /// Open the Accessibility pane in System Settings so the user can flip the
-    /// switch without hunting through menus.
+    /// Open Settings → Privacy & Security → Accessibility so the user can flip
+    /// the switch without hunting through menus.
     static func openSettings() {
         let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
         NSWorkspace.shared.open(url)
     }
 
-    /// Reveal the running app's bundle in Finder so the user can drag it into
-    /// the Accessibility list's `+` picker. macOS only auto-adds an entry the
-    /// first time `AXIsProcessTrustedWithOptions(prompt:)` fires for a given
-    /// signature; for ad-hoc-signed builds the user often has to add it by
-    /// hand, and the easiest way is drag-and-drop from Finder.
-    static func revealAppInFinder() {
-        let url = Bundle.main.bundleURL
-        NSWorkspace.shared.activateFileViewerSelecting([url])
-    }
-
-    /// One-shot "do everything we can to get the user un-stuck": trigger the
-    /// system prompt (in case it's eligible), open Accessibility settings, and
-    /// reveal the app in Finder so they can drag it into the list.
+    /// Get the user from "blocked on permissions" → "toggle is right there":
+    ///
+    /// 1. `AXIsProcessTrustedWithOptions(prompt: true)` — registers this
+    ///    bundle in TCC's database so an entry appears in the Accessibility
+    ///    list. macOS will also show its own prompt the first time.
+    /// 2. Open Settings to the Accessibility pane so the user only needs to
+    ///    flip the toggle next to "Copied".
+    ///
+    /// We don't reveal the app in Finder — that step was confusing and only
+    /// helps when the bundle path is unfamiliar. Installing to /Applications
+    /// (see `build.sh`) avoids that situation entirely.
     static func requestAccess() {
         _ = isTrusted(prompt: true)
-        openSettings()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            revealAppInFinder()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            openSettings()
         }
     }
 }

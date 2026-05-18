@@ -6,6 +6,10 @@ struct ContentView: View {
     @State private var searchText = ""
     @State private var selectedID: UUID?
     @State private var hoveredID: UUID?
+    /// Token that bumps every time we want the list to auto-scroll to the
+    /// selected row. Hover never bumps it, so resting the cursor on an item
+    /// doesn't drag the list around.
+    @State private var keyboardScrollToken: Int = 0
     @State private var accessibilityTrusted: Bool = AccessibilityHelper.isTrusted()
     @State private var autoCopyScreenshots: Bool = ScreenshotWatcher.isEnabled
     @FocusState private var searchFocused: Bool
@@ -62,8 +66,8 @@ struct ContentView: View {
             selectedID = filteredItems.first?.id
         }
         .background(KeyHandler(
-            onMoveDown: { moveSelection(by: 1) },
-            onMoveUp: { moveSelection(by: -1) },
+            onMoveDown: { moveSelection(by: 1); keyboardScrollToken &+= 1 },
+            onMoveUp: { moveSelection(by: -1); keyboardScrollToken &+= 1 },
             onSubmit: { pasteSelected() },
             onCopySelected: { copySelected() },
             onDeleteSelected: { deleteSelected() },
@@ -76,14 +80,7 @@ struct ContentView: View {
     private var background: some View {
         ZStack {
             VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
-            LinearGradient(
-                colors: [
-                    Color(red: 0.08, green: 0.08, blue: 0.10).opacity(0.78),
-                    Color(red: 0.04, green: 0.04, blue: 0.06).opacity(0.86)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            Color(red: 0.06, green: 0.06, blue: 0.08).opacity(0.82)
         }
         .ignoresSafeArea()
     }
@@ -164,10 +161,10 @@ struct ContentView: View {
                 .padding(.horizontal, 8)
                 .padding(.bottom, 8)
             }
-            .onChange(of: selectedID) { _, newID in
-                guard let newID else { return }
+            .onChange(of: keyboardScrollToken) { _, _ in
+                guard let id = selectedID else { return }
                 withAnimation(.easeOut(duration: 0.12)) {
-                    proxy.scrollTo(newID, anchor: .center)
+                    proxy.scrollTo(id, anchor: .center)
                 }
             }
         }
@@ -203,7 +200,6 @@ struct ContentView: View {
             onCopy: { copy(item) },
             onHover: { hovering in
                 hoveredID = hovering ? item.id : (hoveredID == item.id ? nil : hoveredID)
-                if hovering { selectedID = item.id }
             }
         )
         .id(item.id)
@@ -222,7 +218,7 @@ struct ContentView: View {
                     Text("Enable Accessibility to paste")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(.white.opacity(0.92))
-                    Text("Items still copy to the clipboard, but ⌘V needs permission.")
+                    Text("Click below — Settings opens to the Accessibility list. Find Copied and turn the toggle on.")
                         .font(.system(size: 10.5))
                         .foregroundColor(.white.opacity(0.55))
                         .fixedSize(horizontal: false, vertical: true)
@@ -230,15 +226,8 @@ struct ContentView: View {
                 Spacer(minLength: 0)
             }
 
-            VStack(alignment: .leading, spacing: 4) {
-                bannerStep(1, "Click the button below — Settings opens and Finder reveals JugnooClipboard.app.")
-                bannerStep(2, "Drag JugnooClipboard.app into the Accessibility list (or press +).")
-                bannerStep(3, "Toggle it on, then come back and hit Recheck.")
-            }
-            .padding(.leading, 22)
-
             HStack(spacing: 6) {
-                bannerButton("Open Settings & Reveal App", primary: true) {
+                bannerButton("Open Accessibility Settings", primary: true) {
                     AccessibilityHelper.requestAccess()
                 }
                 bannerButton("Recheck", primary: false) {
@@ -256,18 +245,6 @@ struct ContentView: View {
                         .stroke(Color(red: 1.0, green: 0.78, blue: 0.36).opacity(0.25), lineWidth: 0.5)
                 )
         )
-    }
-
-    private func bannerStep(_ n: Int, _ text: String) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Text("\(n).")
-                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.45))
-            Text(text)
-                .font(.system(size: 10.5))
-                .foregroundColor(.white.opacity(0.62))
-                .fixedSize(horizontal: false, vertical: true)
-        }
     }
 
     private func bannerButton(_ label: String, primary: Bool, action: @escaping () -> Void) -> some View {
@@ -330,7 +307,7 @@ struct ContentView: View {
                 }
                 Button("Clear unpinned", action: { clipboard.clearUnpinned() })
                 Divider()
-                Button("Quit JugnooClipboard") { NSApp.terminate(nil) }
+                Button("Quit Copied") { NSApp.terminate(nil) }
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .font(.system(size: 13))
@@ -481,11 +458,7 @@ struct ClipboardRow: View {
     private var rowBackground: some View {
         Group {
             if isSelected {
-                LinearGradient(
-                    colors: [accentColor.opacity(0.22), accentColor.opacity(0.10)],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
+                accentColor.opacity(0.16)
             } else if isHovered {
                 Color.white.opacity(0.05)
             } else {

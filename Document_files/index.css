@@ -1,0 +1,21 @@
+.parentbox{
+    height: 500px;
+    background-color: red;
+    width: 500px;
+    position: relative;
+    bottom: 1px;
+}
+
+.box{
+    height: 200px;
+    width: 200px;
+    background-color: blue;
+    margin-top: 3px;
+    margin-right: 2px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: absolute;
+    right: 1px;
+    bottom: 1px;
+}
